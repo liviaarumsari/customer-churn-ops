@@ -26,7 +26,11 @@ spec:
               value: "/opt/airflow"
             - name: AIRFLOW__CORE__SQL_ALCHEMY_CONN
               value: "sqlite:////opt/airflow/db_data/airflow.db"
-          command: ["airflow", "db", "init"]
+            - name: _AIRFLOW_WWW_USER_USERNAME
+              value: "admin"
+            - name: _AIRFLOW_WWW_USER_PASSWORD
+              value: "admin"
+          command: ["/bin/bash", "-c", "airflow db init && airflow users create --username $${_AIRFLOW_WWW_USER_USERNAME} --password $${_AIRFLOW_WWW_USER_PASSWORD} --firstname Admin --lastname User --role Admin --email admin@example.com"]
           volumeMounts:
             - name: airflow-db-data
               mountPath: /opt/airflow/db_data
