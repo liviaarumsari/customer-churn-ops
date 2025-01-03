@@ -12,40 +12,46 @@ spec:
       labels:
         app: minio
     spec:
+      initContainers:
+        - name: create-buckets
+          image: quay.io/minio/mc:latest
+          command:
+            - /bin/sh
+            - -c
+            - |
+              mc alias set myminio http://127.0.0.1:8000 minioadmin minioadmin
+              mc mb myminio/train
+              mc mb myminio/preprocessed
+              mc mb myminio/raw
+          env:
+            - name: MINIO_ROOT_USER
+              valueFrom:
+                secretKeyRef:
+                  name: minio-creds
+                  key: root-user
+            - name: MINIO_ROOT_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: minio-creds
+                  key: root-password
       containers:
         - name: minio
           image: quay.io/minio/minio:latest
           args:
             - server
             - /data
+            - --console-address=:8001 # Force the console to use port 8001
           ports:
-            - containerPort: 9000
-            - containerPort: 9001
+            - containerPort: 8000 # MinIO API
+            - containerPort: 8001 # MinIO Console
           env:
             - name: MINIO_ROOT_USER
-              value: 'minioadmin'
+              value: 'minioadmin' # Replace with your desired username
             - name: MINIO_ROOT_PASSWORD
-              value: 'minioadmin'
+              value: 'minioadmin' # Replace with your desired password
           volumeMounts:
             - name: minio-data
               mountPath: /data
       volumes:
         - name: minio-data
           emptyDir: {}
----
-apiVersion: v1
-kind: Service
-metadata:
-  name: minio-service
-spec:
-  ports:
-    - protocol: TCP
-      port: 9000
-      targetPort: 9000
-      name: 'http'
-    - protocol: TCP
-      port: 9001
-      targetPort: 9001
-      name: 'console'
-  selector:
-    app: minio
