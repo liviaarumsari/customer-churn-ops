@@ -69,3 +69,8 @@ kubectl delete pod -l app=airflow
 kubectl create clusterrolebinding default-admin \
  --clusterrole=cluster-admin \
  --serviceaccount=default:default
+
+
+# Web UI
+1. Minio: http://localhost:8001 (minioadmin/minioadmin)
+1. Airflow: http://localhost:8080 (admin/admin). DAG id: minio_to_spark
