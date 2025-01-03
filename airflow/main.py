@@ -33,7 +33,7 @@ def check_minio_files():
         for obj in objects:
             file_info = minio_client.stat_object(RAW_BUCKET, obj.object_name)
             logging.info(f"Found file: {obj.object_name}, Size: {file_info.size} bytes")
-            if file_info.size > 10000:  # TODO: Update threshold
+            if file_info.size > 288000:  # TODO: Update threshold
                 logging.info(f"File {obj.object_name} exceeds threshold!")
                 return obj.object_name
         logging.info("No files exceeded the threshold.")
