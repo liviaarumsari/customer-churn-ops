@@ -9,10 +9,12 @@ import logging
 import time
 
 # MinIO client setup
-MINIO_URL = "http://minio-service.default.svc.cluster.local:9000"
+MINIO_URL = "http://minio-service.default.svc.cluster.local:8000"
 MINIO_ACCESS_KEY = "minioadmin"
 MINIO_SECRET_KEY = "minioadmin"
 RAW_BUCKET = "raw"
+PREPROCESSED_BUCKET = "preprocessed"
+TRAIN_BUCKET = "train"
 
 # Initialize MinIO client
 minio_client = Minio(
@@ -31,7 +33,7 @@ def check_minio_files():
         for obj in objects:
             file_info = minio_client.stat_object(RAW_BUCKET, obj.object_name)
             logging.info(f"Found file: {obj.object_name}, Size: {file_info.size} bytes")
-            if file_info.size > 1000:  # Update threshold
+            if file_info.size > 10000:  # TODO: Update threshold
                 logging.info(f"File {obj.object_name} exceeds threshold!")
                 return obj.object_name
         logging.info("No files exceeded the threshold.")
@@ -40,7 +42,7 @@ def check_minio_files():
         raise
     return None
 
-# Decide next step based on file size
+# Decide next step based on check_minio_files() return value
 def decide_next_step(**context):
     file_name = context['task_instance'].xcom_pull(task_ids='check_minio_files')
     if file_name:
@@ -65,9 +67,9 @@ def trigger_spark_job():
                                 image="spark-preprocessor:latest",
                                 image_pull_policy="Never",
                                 env=[
-                                    client.V1EnvVar(name="MINIO_ENDPOINT", value="http://minio-service.default.svc.cluster.local:9000"),
-                                    client.V1EnvVar(name="MINIO_ACCESS_KEY", value="minioadmin"),
-                                    client.V1EnvVar(name="MINIO_SECRET_KEY", value="minioadmin"),
+                                    client.V1EnvVar(name="MINIO_ENDPOINT", value=MINIO_URL),
+                                    client.V1EnvVar(name="MINIO_ACCESS_KEY", value=MINIO_ACCESS_KEY),
+                                    client.V1EnvVar(name="MINIO_SECRET_KEY", value=MINIO_SECRET_KEY),
                                 ],
                             )
                         ],
@@ -99,7 +101,11 @@ def trigger_spark_job():
         batch_v1.delete_namespaced_job(name="spark-preprocessor", namespace="default", body={})
         raise
 
-# Default arguments for the DAG
+# TODO: implement PSI calculation
+def calculatePSI():
+    return
+
+# Default args for the DAG
 default_args = {
     'owner': 'airflow',
     'depends_on_past': False,
@@ -108,7 +114,6 @@ default_args = {
     'retries': 1,
     'retry_delay': timedelta(minutes=2),
 }
-
 with DAG(
     dag_id="minio_to_spark",
     default_args=default_args,
@@ -119,7 +124,7 @@ with DAG(
 ) as dag:
     logging.info("Starting the Task.")
 
-    # Task 1: Check MinIO for large files
+    # Task 1: Check MinIO for files
     check_files_task = PythonOperator(
         task_id="check_minio_files",
         python_callable=check_minio_files,
@@ -132,7 +137,7 @@ with DAG(
         python_callable=decide_next_step,
     )
 
-    # Task 3a: Trigger Spark Preprocessor as a Kubernetes Job
+    # Task 3a: Trigger Spark Job
     spark_preprocessor_task = PythonOperator(
         task_id="trigger_spark_preprocessor",
         python_callable=trigger_spark_job,
@@ -141,7 +146,6 @@ with DAG(
     # Task 3b: No large files found
     no_large_files = DummyOperator(task_id='no_large_files')
 
-    # Task dependencies
+    # Task dependencies graph
     check_files_task >> decide_step
     decide_step >> [spark_preprocessor_task, no_large_files]
-    # spark_preprocessor_task >> decide_step
