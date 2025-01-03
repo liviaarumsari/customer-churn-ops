@@ -25,15 +25,9 @@ spec:
               mc mb myminio/raw
           env:
             - name: MINIO_ROOT_USER
-              valueFrom:
-                secretKeyRef:
-                  name: minio-creds
-                  key: root-user
+              value: 'minioadmin' # Hard-coded root user
             - name: MINIO_ROOT_PASSWORD
-              valueFrom:
-                secretKeyRef:
-                  name: minio-creds
-                  key: root-password
+              value: 'minioadmin' # Hard-coded root password
       containers:
         - name: minio
           image: quay.io/minio/minio:latest
@@ -46,9 +40,9 @@ spec:
             - containerPort: 8001 # MinIO Console
           env:
             - name: MINIO_ROOT_USER
-              value: 'minioadmin' # Replace with your desired username
+              value: 'minioadmin' # Hard-coded root user
             - name: MINIO_ROOT_PASSWORD
-              value: 'minioadmin' # Replace with your desired password
+              value: 'minioadmin' # Hard-coded root password
           volumeMounts:
             - name: minio-data
               mountPath: /data

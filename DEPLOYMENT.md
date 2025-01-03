@@ -1,7 +1,12 @@
 minikube start
 
+kubectl apply -f k8s/ingress.yaml
+
+minikube tunnel
+
 Minio:
 kubectl apply -f minio/minio-deployment.yaml
+kubectl apply -f minio/minio-service.yaml
 
 Spark:
 Build Container:
