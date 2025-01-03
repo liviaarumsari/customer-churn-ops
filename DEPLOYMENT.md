@@ -54,6 +54,8 @@ minikube image load airflow:latest
 
 kubectl apply -f airflow/airflow-deployment.yaml
 
+kubectl port-forward service/airflow 8080:8080
+
 ## Restart pod
 kubectl delete pod -l app=airflow
 
