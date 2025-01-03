@@ -1,0 +1,30 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mlflow
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: mlflow
+  template:
+    metadata:
+      labels:
+        app: mlflow
+    spec:
+      containers:
+        - name: mlflow
+          image: mlflow/mlflow:1.26.0
+          args:
+            - server
+            - --backend-store-uri=sqlite:///mlflow.db
+            - --default-artifact-root=s3://mlflow-artifacts
+          env:
+            - name: AWS_ACCESS_KEY_ID
+              value: 'minioadmin' # Replace with your MinIO access key
+            - name: AWS_SECRET_ACCESS_KEY
+              value: 'minioadmin' # Replace with your MinIO secret key
+            - name: MLFLOW_S3_ENDPOINT_URL
+              value: 'http://minio-service.default.svc.cluster.local:9000'
+          ports:
+            - containerPort: 5000

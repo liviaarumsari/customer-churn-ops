@@ -1,0 +1,19 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: spark-preprocessor
+spec:
+  template:
+    spec:
+      containers:
+        - name: spark-preprocessor
+          image: spark-preprocessor:latest
+          imagePullPolicy: Never
+          env:
+            - name: MINIO_ENDPOINT
+              value: 'http://minio-service.default.svc.cluster.local:9000'
+            - name: MINIO_ACCESS_KEY
+              value: 'minioadmin'
+            - name: MINIO_SECRET_KEY
+              value: 'minioadmin'
+      restartPolicy: Never

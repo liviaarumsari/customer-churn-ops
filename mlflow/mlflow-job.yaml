@@ -1,0 +1,20 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: mlflow-job
+  labels:
+    app: mlflow-job
+spec:
+  template:
+    metadata:
+      labels:
+        app: mlflow-job
+    spec:
+      containers:
+        - name: mlflow-job
+          image: mlflow-job:latest # Replace with the name of your built Docker image
+          imagePullPolicy: Never # Use locally loaded image in Minikube
+          env:
+            - name: MLFLOW_TRACKING_URI
+              value: 'http://mlflow-service.default.svc.cluster.local:5000' # Point to the MLflow tracking server
+      restartPolicy: Never
