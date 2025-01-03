@@ -3,14 +3,17 @@ kind: Service
 metadata:
   name: minio-service
 spec:
+  type: NodePort
   ports:
     - protocol: TCP
       port: 8000
       targetPort: 8000
       name: 'http'
+      nodePort: 30000
     - protocol: TCP
       port: 8001
       targetPort: 8001
       name: 'console'
+      nodePort: 30001
   selector:
     app: minio
