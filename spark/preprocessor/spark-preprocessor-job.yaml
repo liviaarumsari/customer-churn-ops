@@ -7,7 +7,7 @@ spec:
     spec:
       containers:
         - name: spark-preprocessor
-          image: spark-preprocessor:latest
+          image: docker.io/library/spark-preprocessor:latest
           imagePullPolicy: Never
           env:
             - name: MINIO_ENDPOINT

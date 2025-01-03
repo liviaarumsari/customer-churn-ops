@@ -41,7 +41,7 @@ verify:
 
 # NOTE: DO NOT RUN THIS
 ssh-into-airflow:
-	kubectl exec -it airflow-64f54b9979-fjg7g -- /bin/bash
+	kubectl exec -it <airflow-pod-name> -- /bin/bash
 
 airflow-create-user:
 	airflow users create \
