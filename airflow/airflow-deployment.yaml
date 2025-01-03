@@ -1,0 +1,81 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: airflow
+  labels:
+    app: airflow
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: airflow
+  template:
+    metadata:
+      labels:
+        app: airflow
+    spec:
+      volumes:
+        - name: airflow-db-data
+          emptyDir: {}
+      initContainers:
+        - name: airflow-init
+          image: docker.io/library/airflow:latest
+          imagePullPolicy: Never
+          env:
+            - name: AIRFLOW_HOME
+              value: "/opt/airflow"
+            - name: AIRFLOW__CORE__SQL_ALCHEMY_CONN
+              value: "sqlite:////opt/airflow/db_data/airflow.db"
+          command: ["airflow", "db", "init"]
+          volumeMounts:
+            - name: airflow-db-data
+              mountPath: /opt/airflow/db_data
+      containers:
+        - name: airflow
+          image: docker.io/library/airflow:latest
+          imagePullPolicy: Never
+          ports:
+            - containerPort: 8080
+          env:
+            - name: AIRFLOW_HOME
+              value: "/opt/airflow"
+            - name: AIRFLOW__CORE__SQL_ALCHEMY_CONN
+              value: "sqlite:////opt/airflow/db_data/airflow.db"
+            - name: AIRFLOW__WEBSERVER__SECRET_KEY
+              value: "Fyq7lG3LkUI_HCkhbEV6lfNpqxZPbYBdT-LZ7m1LrHo"
+            - name: MINIO_URL
+              value: "http://minio-service.default.svc.cluster.local:9000"
+            - name: MINIO_ACCESS_KEY
+              value: "minioadmin"
+            - name: MINIO_SECRET_KEY
+              value: "minioadmin"
+          volumeMounts:
+            - name: airflow-db-data
+              mountPath: /opt/airflow/db_data
+          command: ["airflow", "webserver"]
+
+        - name: scheduler
+          image: docker.io/library/airflow:latest
+          imagePullPolicy: Never
+          env:
+            - name: AIRFLOW__CORE__SQL_ALCHEMY_CONN
+              value: "sqlite:////opt/airflow/db_data/airflow.db"
+            - name: AIRFLOW__WEBSERVER__SECRET_KEY
+              value: "Fyq7lG3LkUI_HCkhbEV6lfNpqxZPbYBdT-LZ7m1LrHo"
+          volumeMounts:
+            - name: airflow-db-data
+              mountPath: /opt/airflow/db_data
+          command: ["airflow", "scheduler"]
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: airflow-service
+spec:
+  selector:
+    app: airflow
+  ports:
+    - protocol: TCP
+      port: 8080
+      targetPort: 8080
+  type: ClusterIP
