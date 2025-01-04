@@ -1,6 +1,7 @@
 import mlflow
 
 MLFLOW_TRACKING_URL = 'http://mlflow-service.default.svc.cluster.local:8002'
+MINIO_URL = "http://minio-service.default.svc.cluster.local:8000"
 
 def main():
     # Set MLflow tracking URI

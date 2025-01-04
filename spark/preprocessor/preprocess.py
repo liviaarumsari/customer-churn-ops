@@ -1,5 +1,7 @@
 from pyspark.sql import SparkSession
 
+MINIO_URL = "http://minio-service.default.svc.cluster.local:8000"
+
 # TODO: Implement preprocessing
 def main():
     # Initialize Spark session
