@@ -12,19 +12,23 @@ spec:
       labels:
         app: mlflow
     spec:
+      imagePullSecrets:
+        - name: ghcr-secret
       containers:
         - name: mlflow
-          image: ubuntu/mlflow:latest
+          image: ghcr.io/mlflow/mlflow:v2.19.0
           args:
-            - server
-            - --backend-store-uri=s3://minio/mlflow
-            - --default-artifact-root=s3://minio/mlflow
-            - --host=0.0.0.0
+            - 'mlflow'
+            - 'server'
+            - '--backend-store-uri=sqlite:///mlflow.db'
+            - '--default-artifact-root=s3://minio/mlflow'
+            - '--host=0.0.0.0'
+            - '--port=8002'
           ports:
             - containerPort: 8002
           env:
             - name: MLFLOW_S3_ENDPOINT_URL
-              value: http://minio.default.svc.cluster.local:9000
+              value: http://minio.default.svc.cluster.local:8000
             - name: AWS_ACCESS_KEY_ID
               value: minioadmin
             - name: AWS_SECRET_ACCESS_KEY

@@ -1,8 +1,18 @@
+# Github
+
+## Generate Personal Access Token
+
+Go to Settings > Developer Settings > Personal access tokens > Generate new token
+
 # Minikube
 
 minikube start
 
 minikube docker-env --shell powershell | Invoke-Expression
+
+kubectl create secret docker-registry ghcr-secret `--docker-server=ghcr.io`
+--docker-username=<github-username> `
+--docker-password=<github-personal-access-token>
 
 # Build Stage
 
@@ -53,6 +63,10 @@ kubectl apply -f airflow/airflow-deployment.yaml
 ## Expose Minio Console
 
 kubectl port-forward service/minio-service 8001:8001
+
+## Expose MLflow Console
+
+kubectl port-forward service/mlflow-service 8002:8002
 
 ## Expose Airflow Console
 
