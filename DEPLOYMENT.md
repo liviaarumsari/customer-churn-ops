@@ -1,18 +1,12 @@
+# Minikube
+
 minikube start
 
-# Minio:
+minikube docker-env --shell powershell | Invoke-Expression
 
-## Setup & Run pod
+# Build Stage
 
-kubectl apply -f minio/minio-deployment.yaml
-
-kubectl apply -f minio/minio-service.yaml
-
-kubectl port-forward service/minio-service 8001:8001
-
-# Spark:
-
-## Setup & Run pod
+## Build spark preprocessor image
 
 cd spark/preprocessor
 
@@ -20,17 +14,7 @@ docker build -t spark-preprocessor:latest -f Dockerfile .
 
 cd ../..
 
-minikube image load spark-preprocessor:latest
-
-minikube image load spark-psi-worker:latest
-
-kubectl apply -f spark/preprocessor/spark-preprocessor-job.yaml
-
-kubectl apply -f spark/psi-worker/spark-psi-worker-job.yaml
-
-# MLFlow
-
-## Setup
+## Build mlflow app image
 
 cd mlflow/app
 
@@ -38,39 +22,38 @@ docker build -t mlflow-job:latest .
 
 cd ../..
 
-minikube image load mlflow-job:latest
+## Build airflow image
 
-## Run pod
+cd airflow
+
+docker build -t airflow:latest .
+
+cd ..
+
+# Deploy Stage
+
+## Deploy Minio
+
+kubectl apply -f minio/minio-deployment.yaml
+
+kubectl apply -f minio/minio-service.yaml
+
+## Deploy MLFlow
 
 kubectl apply -f mlflow/mlflow-deployment.yaml
 
 kubectl apply -f mlflow/mlflow-service.yaml
 
-kubectl apply -f mlflow/mlflow-job.yaml
-
-# Airflow:
-
-## Setup & Run pod
-
-cd airflow && docker build -t airflow:latest . && cd ..
-
-minikube image load airflow:latest
+## Deploy Airflow
 
 kubectl apply -f airflow/airflow-deployment.yaml
 
+# Expose
+
+## Expose Minio Console
+
+kubectl port-forward service/minio-service 8001:8001
+
+## Expose Airflow Console
+
 kubectl port-forward service/airflow 8080:8080
-
-## Restart pod
-
-kubectl delete pod -l app=airflow
-
-## To Grant Cluster-Admin permission to `default` service account (to allow Airflow to trigger Spark Job)
-
-kubectl create clusterrolebinding default-admin \
- --clusterrole=cluster-admin \
- --serviceaccount=default:default
-
-
-# Web UI
-1. Minio: http://localhost:8001 (minioadmin/minioadmin)
-1. Airflow: http://localhost:8080 (admin/admin). DAG id: minio_to_spark
