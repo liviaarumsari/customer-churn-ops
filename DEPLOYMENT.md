@@ -56,4 +56,4 @@ kubectl port-forward service/minio-service 8001:8001
 
 ## Expose Airflow Console
 
-kubectl port-forward service/airflow 8080:8080
+kubectl port-forward service/airflow-service 8080:8080
