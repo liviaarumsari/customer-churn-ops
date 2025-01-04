@@ -75,7 +75,7 @@ def trigger_spark_job():
                         ],
                         restart_policy="Never",
                     )
-                )
+                ),
             ),
         )
 
@@ -101,6 +101,54 @@ def trigger_spark_job():
         batch_v1.delete_namespaced_job(name="spark-preprocessor", namespace="default", body={})
         raise
 
+# Trigger the MLFlow Retraining job as a Kubernetes Job
+def trigger_retraining_job():
+    try:
+        # Load in-cluster Kubernetes configuration
+        config.load_incluster_config()
+        
+        # Define the Kubernetes Job specification
+        job = client.V1Job(
+            metadata=client.V1ObjectMeta(name="mlflow-job"),
+            spec=client.V1JobSpec(
+                template=client.V1PodTemplateSpec(
+                    spec=client.V1PodSpec(
+                        containers=[
+                            client.V1Container(
+                                name="mlflow-job",
+                                image="mlflow-job:latest",
+                                image_pull_policy="Never",
+                            )
+                        ],
+                        restart_policy="Never",
+                    )
+                ),
+            ),
+        )
+
+        # Create the Job in the "default" namespace
+        batch_v1 = client.BatchV1Api()
+        batch_v1.create_namespaced_job(namespace="default", body=job)
+        logging.info("MLFlow Retraining job triggered successfully.")
+
+        # Poll the job status
+        while True:
+            job_status = batch_v1.read_namespaced_job_status(
+                name="mlflow-job", namespace="default"
+            )
+            if job_status.status.succeeded:
+                print("Job completed successfully")
+                break
+            elif job_status.status.failed:
+                raise Exception("Job failed")
+            time.sleep(10)
+        logging.info("MLFlow Retraining job finished.")
+    except Exception as e:
+        logging.error(f"Failed to trigger MLFlow Retraining job: {str(e)}")
+        batch_v1.delete_namespaced_job(name="mlflow-job", namespace="default", body={})
+        raise
+
+
 # TODO: implement PSI calculation
 def calculatePSI():
     return
@@ -112,13 +160,13 @@ default_args = {
     'email_on_failure': False,
     'email_on_retry': False,
     'retries': 1,
-    'retry_delay': timedelta(minutes=2),
+    'retry_delay': timedelta(minutes=1),
 }
 with DAG(
     dag_id="minio_to_spark",
     default_args=default_args,
     description="DAG to watch MinIO and trigger Spark preprocessing",
-    schedule_interval=timedelta(minutes=1),
+    schedule_interval=timedelta(minutes=3),
     start_date=datetime(2025, 1, 1),
     catchup=False,
 ) as dag:
@@ -146,6 +194,13 @@ with DAG(
     # Task 3b: No large files found
     no_large_files = DummyOperator(task_id='no_large_files')
 
+    # Task 4: Trigger Retraining Job
+    retraining_job = PythonOperator(
+        task_id="trigger_retraining_job",
+        python_callable=trigger_retraining_job,
+    )
+
     # Task dependencies graph
     check_files_task >> decide_step
     decide_step >> [spark_preprocessor_task, no_large_files]
+    spark_preprocessor_task >> retraining_job
