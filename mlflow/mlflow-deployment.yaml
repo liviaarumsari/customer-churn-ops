@@ -14,17 +14,18 @@ spec:
     spec:
       containers:
         - name: mlflow
-          image: mlflow/mlflow:1.26.0
+          image: ubuntu/mlflow:latest
           args:
             - server
-            - --backend-store-uri=sqlite:///mlflow.db
-            - --default-artifact-root=s3://mlflow-artifacts
-          env:
-            - name: AWS_ACCESS_KEY_ID
-              value: 'minioadmin' # Replace with your MinIO access key
-            - name: AWS_SECRET_ACCESS_KEY
-              value: 'minioadmin' # Replace with your MinIO secret key
-            - name: MLFLOW_S3_ENDPOINT_URL
-              value: 'http://minio-service.default.svc.cluster.local:9000'
+            - --backend-store-uri=s3://minio/mlflow
+            - --default-artifact-root=s3://minio/mlflow
+            - --host=0.0.0.0
           ports:
-            - containerPort: 5000
+            - containerPort: 8002
+          env:
+            - name: MLFLOW_S3_ENDPOINT_URL
+              value: http://minio.default.svc.cluster.local:9000
+            - name: AWS_ACCESS_KEY_ID
+              value: minioadmin
+            - name: AWS_SECRET_ACCESS_KEY
+              value: minioadmin
