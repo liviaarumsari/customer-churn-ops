@@ -158,9 +158,11 @@ def trigger_retraining_job():
 # CONSTANT
 PREPROCESSED_FILE = "preprocessed_data.csv"
 TRAIN_FILE = "train_data.csv"
-MONITORED_FEATURES = ["MonthlyCharges","TotalCharges"]
+MONITORED_FEATURES = ["MonthlyCharges", "TotalCharges"]
+PSI_THRESHOLD = 0.2
 
-def calculatePSI(**context):
+
+def calculate_psi_score(**context):
     try:
         # Fetching files from MinIO
         preprocessed_data = minio_client.get_object(PREPROCESSED_BUCKET, PREPROCESSED_FILE)
@@ -171,7 +173,7 @@ def calculatePSI(**context):
         train_df = pd.read_csv(train_data)
 
         # PSI Calculation Logic
-        def calculate_total_psi(expected_df, actual_df, columns, bucket=10):
+        def calculate_psi(expected_df, actual_df, columns, bucket=10):
             """
             Calculate the total PSI for a dataset by summing PSI values for individual features.
             """
@@ -186,7 +188,7 @@ def calculatePSI(**context):
                 observed_perc = np.histogram(actual, bins=bucket, range=(expected.min(), expected.max()), density=True)[
                     0]
                 expected_perc = \
-                np.histogram(expected, bins=bucket, range=(expected.min(), expected.max()), density=True)[0]
+                    np.histogram(expected, bins=bucket, range=(expected.min(), expected.max()), density=True)[0]
 
                 # Avoid division by zero
                 expected_perc = np.where(expected_perc == 0, 0.0000000001, expected_perc)
@@ -199,7 +201,7 @@ def calculatePSI(**context):
 
             return total_psi, psi_details
 
-        psi_score = calculate_total_psi(train_df, preprocessed_df, MONITORED_FEATURES)
+        psi_score = calculate_psi(train_df, preprocessed_df, MONITORED_FEATURES)
 
         context['task_instance'].xcom_push(key='psi_score', value=psi_score)
         logging.info(f"PSI Score Calculated: {psi_score}")
@@ -207,6 +209,14 @@ def calculatePSI(**context):
     except Exception as e:
         logging.error(f"Error in calculating PSI: {str(e)}")
         raise e
+
+
+# Decide next step based on total PSI
+def decide_based_on_total_psi(**context):
+    total_psi = context['task_instance'].xcom_pull(task_ids='calculate_psi', key='psi_score')
+    if total_psi > PSI_THRESHOLD:
+        return 'trigger_retraining_job'
+    return 'skip_retraining'
 
 
 # Default args for the DAG
@@ -250,13 +260,34 @@ with DAG(
     # Task 3b: No large files found
     no_large_files = DummyOperator(task_id='no_large_files')
 
-    # Task 4: Trigger Retraining Job
+    # Task 4 : Calculate PSI
+    calculate_psi_task = PythonOperator(
+        task_id="calculate_psi",
+        python_callable=calculate_psi_score,
+        provide_context=True,
+    )
+
+    # Task 5: Decide Retraining Based on PSI
+    decide_retraining_task = BranchPythonOperator(
+        task_id="decide_based_on_total_psi",
+        python_callable=decide_based_on_total_psi,
+        provide_context=True,
+    )
+
+    # Task 6a: Trigger Retraining Job
     retraining_job = PythonOperator(
         task_id="trigger_retraining_job",
         python_callable=trigger_retraining_job,
     )
 
+    # Task 6b: Skip retraining
+    skip_retraining_task = DummyOperator(
+        task_id="skip_retraining",
+    )
+
     # Task dependencies graph
     check_files_task >> decide_step
     decide_step >> [spark_preprocessor_task, no_large_files]
-    spark_preprocessor_task >> retraining_job
+    spark_preprocessor_task >> calculate_psi_task
+    calculate_psi_task >> decide_retraining_task
+    decide_retraining_task >> [retraining_job, skip_retraining_task]
