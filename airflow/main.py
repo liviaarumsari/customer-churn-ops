@@ -7,6 +7,8 @@ from kubernetes import client, config
 import os
 import logging
 import time
+import numpy as np
+import pandas as pd
 
 # MinIO client setup
 MINIO_URL = "http://minio-service.default.svc.cluster.local:8000"
@@ -23,6 +25,7 @@ minio_client = Minio(
     secret_key=MINIO_SECRET_KEY,
     secure=False,
 )
+
 
 # Check file size in MinIO
 def check_minio_files():
@@ -42,6 +45,7 @@ def check_minio_files():
         raise
     return None
 
+
 # Decide next step based on check_minio_files() return value
 def decide_next_step(**context):
     file_name = context['task_instance'].xcom_pull(task_ids='check_minio_files')
@@ -49,12 +53,13 @@ def decide_next_step(**context):
         return 'trigger_spark_preprocessor'
     return 'no_large_files'
 
+
 # Trigger the Spark job as a Kubernetes Job
 def trigger_spark_job():
     try:
         # Load in-cluster Kubernetes configuration
         config.load_incluster_config()
-        
+
         # Define the Kubernetes Job specification
         job = client.V1Job(
             metadata=client.V1ObjectMeta(name="spark-preprocessor"),
@@ -101,12 +106,13 @@ def trigger_spark_job():
         batch_v1.delete_namespaced_job(name="spark-preprocessor", namespace="default", body={})
         raise
 
+
 # Trigger the MLFlow Retraining job as a Kubernetes Job
 def trigger_retraining_job():
     try:
         # Load in-cluster Kubernetes configuration
         config.load_incluster_config()
-        
+
         # Define the Kubernetes Job specification
         job = client.V1Job(
             metadata=client.V1ObjectMeta(name="mlflow-job"),
@@ -149,9 +155,59 @@ def trigger_retraining_job():
         raise
 
 
-# TODO: implement PSI calculation
-def calculatePSI():
-    return
+# CONSTANT
+PREPROCESSED_FILE = "preprocessed_data.csv"
+TRAIN_FILE = "train_data.csv"
+MONITORED_FEATURES = ["MonthlyCharges","TotalCharges"]
+
+def calculatePSI(**context):
+    try:
+        # Fetching files from MinIO
+        preprocessed_data = minio_client.get_object(PREPROCESSED_BUCKET, PREPROCESSED_FILE)
+        train_data = minio_client.get_object(TRAIN_BUCKET, TRAIN_FILE)
+
+        # Read files into pandas dataframes
+        preprocessed_df = pd.read_csv(preprocessed_data)
+        train_df = pd.read_csv(train_data)
+
+        # PSI Calculation Logic
+        def calculate_total_psi(expected_df, actual_df, columns, bucket=10):
+            """
+            Calculate the total PSI for a dataset by summing PSI values for individual features.
+            """
+            total_psi = 0
+            psi_details = {}
+
+            for col in columns:
+                expected = expected_df[col]
+                actual = actual_df[col]
+
+                # Calculate percentage distributions for observed and expected
+                observed_perc = np.histogram(actual, bins=bucket, range=(expected.min(), expected.max()), density=True)[
+                    0]
+                expected_perc = \
+                np.histogram(expected, bins=bucket, range=(expected.min(), expected.max()), density=True)[0]
+
+                # Avoid division by zero
+                expected_perc = np.where(expected_perc == 0, 0.0000000001, expected_perc)
+                observed_perc = np.where(observed_perc == 0, 0.0000000001, observed_perc)
+
+                # Calculate PSI for this feature
+                psi = np.sum((observed_perc - expected_perc) * np.log(observed_perc / expected_perc))
+                psi_details[col] = psi
+                total_psi += psi
+
+            return total_psi, psi_details
+
+        psi_score = calculate_total_psi(train_df, preprocessed_df, MONITORED_FEATURES)
+
+        context['task_instance'].xcom_push(key='psi_score', value=psi_score)
+        logging.info(f"PSI Score Calculated: {psi_score}")
+
+    except Exception as e:
+        logging.error(f"Error in calculating PSI: {str(e)}")
+        raise e
+
 
 # Default args for the DAG
 default_args = {
@@ -163,12 +219,12 @@ default_args = {
     'retry_delay': timedelta(minutes=1),
 }
 with DAG(
-    dag_id="minio_to_spark",
-    default_args=default_args,
-    description="DAG to watch MinIO and trigger Spark preprocessing",
-    schedule_interval=timedelta(minutes=3),
-    start_date=datetime(2025, 1, 1),
-    catchup=False,
+        dag_id="minio_to_spark",
+        default_args=default_args,
+        description="DAG to watch MinIO and trigger Spark preprocessing",
+        schedule_interval=timedelta(minutes=3),
+        start_date=datetime(2025, 1, 1),
+        catchup=False,
 ) as dag:
     logging.info("Starting the Task.")
 
