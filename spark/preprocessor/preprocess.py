@@ -2,8 +2,14 @@ from pyspark.sql import SparkSession
 from pyspark.sql.types import *
 from pyspark.sql.functions import *
 from pyspark.ml.feature import OneHotEncoder, StringIndexer
+from minio import Minio, S3Error
+import os
 
 MINIO_URL = "http://minio-service.default.svc.cluster.local:8000"
+MINIO_ACCESS_KEY = os.getenv("MINIO_ACCESS_KEY")
+MINIO_SECRET_KEY = os.getenv("MINIO_SECRET_KEY")
+MINIO_BUCKET = "preprocessed"
+FILENAME = "preprocessed.parquet"
 
 def main():
     # Initialize Spark session
@@ -122,7 +128,7 @@ def main():
     # ### Check consistency for PhoneService
     # check consistency for PhoneService related columns
     invalid_phone = df.where("PhoneService == 'No' AND MultipleLines <> 'No phone service'")
-    
+
     # subtract invalid PhoneService from df
     df = df.subtract(invalid_phone)
 
@@ -143,7 +149,7 @@ def main():
 
     # ### Check consistency for SeniorCitizen
     invalid_senior = df.where("SeniorCitizen <> 0 AND SeniorCitizen <> 1")
-    
+
     # subtract
     df = df.subtract(invalid_senior)
 
@@ -282,7 +288,6 @@ def main():
     encoded_df = ohe_model.transform(indexed_df)
 
     df = encoded_df
-    
 
     # ### Reformat values
     df = df.withColumns(
@@ -301,20 +306,51 @@ def main():
     df.show()
     df.count()
 
-
     # ===============
 
     # Export
-    df.write.mode("overwrite").parquet("processed_dataset.parquet")
+    df.write.mode("overwrite").parquet(FILENAME)
 
     # Log message to confirm the job is complete
     print("Preprocessor Spark Job completed successfully.")
 
     # Stop the Spark session
     spark.stop()
+    print("Spark Session Stopped")
 
     # Upload file to Minio
-    
+    print("Starting Upload to MinIO...")
+    minio_client = Minio(
+        MINIO_URL, access_key=MINIO_ACCESS_KEY, secret_key=MINIO_SECRET_KEY
+    )
+
+    # Check Minio bucket
+    print("Check MinIO Bucket Availability...")
+    found = minio_client.bucket_exists(MINIO_BUCKET)
+    if not found:
+        minio_client.make_bucket(MINIO_BUCKET)
+        print("Created bucket", MINIO_BUCKET)
+    else:
+        print("Bucket", MINIO_BUCKET, "already exists")
+
+    minio_client.fput_object(
+        MINIO_BUCKET,
+        FILENAME,
+        FILENAME,
+    )
+    print(
+        FILENAME,
+        "successfully uploaded as object",
+        FILENAME,
+        "to bucket",
+        MINIO_BUCKET,
+    )
+
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except S3Error as e:
+        print("S3Error: ", e)
+    except Exception as e:
+        print("Error: ", e)
