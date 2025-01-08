@@ -23,7 +23,6 @@ minio_client = Minio(
     secure=False,
 )
 
-
 def fetch_data_from_minio(bucket_name, file_name):
     """
     Fetch data from MinIO and return as a Pandas DataFrame.
@@ -53,16 +52,20 @@ def main():
     data = fetch_data_from_minio(TRAIN_BUCKET, TRAIN_FILE)
 
     # Preprocess the data
-    categorical_cols = ['gender', 'Partner', 'Dependents', 'PhoneService', 'MultipleLines', 'InternetService',
-                        'OnlineSecurity', 'OnlineBackup', 'DeviceProtection', 'TechSupport', 'StreamingTV', 'StreamingMovies',
-                        'Contract', 'PaperlessBilling', 'PaymentMethod']
-    le = LabelEncoder()
-    for col in categorical_cols:
-        data[col] = le.fit_transform(data[col])
-
-    scaler = MinMaxScaler()
     X = data.drop("Churn", axis=1)
     y = LabelEncoder().fit_transform(data["Churn"])
+
+    # Separate customerID
+    X = X.drop(columns=["customerID"], errors="ignore")
+
+    # Detect and encode all non-numeric columns
+    categorical_cols = X.select_dtypes(include=['object']).columns
+    le = LabelEncoder()
+    for col in categorical_cols:
+        X[col] = le.fit_transform(X[col].astype(str))
+
+    # Scale the features
+    scaler = MinMaxScaler()
     X_scaled = scaler.fit_transform(X)
 
     X_train, X_test, y_train, y_test = train_test_split(X_scaled, y, test_size=0.2, random_state=42)
@@ -81,20 +84,28 @@ def main():
         # Predict and evaluate
         y_pred = knn.predict(X_test)
         accuracy = accuracy_score(y_test, y_pred)
-        report = classification_report(y_test, y_pred, output_dict=True)
+        report = classification_report(y_test, y_pred, output_dict=True, zero_division=0)
 
         # Log metrics
         mlflow.log_metric("accuracy", accuracy)
-        mlflow.log_metric("precision", report["1"]["precision"])
-        mlflow.log_metric("recall", report["1"]["recall"])
+        mlflow.log_metric("precision", float(report.get("1", {}).get("precision")))
+        mlflow.log_metric("recall", float(report.get("1", {}).get("recall")))
 
+        # input_example = np.array([X_train[0]])
         # Log the model
-        mlflow.sklearn.log_model(knn, "knn_model")
+        # mlflow.sklearn.log_model(knn, "knn_model", input_example=input_example)
 
+        predictions = pd.DataFrame({
+            "prediction": y_pred
+        })
+
+        print(predictions.head())
         print(f"Run ID: {run.info.run_id}")
         print("Model logged successfully!")
 
-    print("Mock pipeline completed!")
+    # End phase: Clear summary
+    print("\nPipeline Execution Complete")
+    print(f"Experiment URL: {MLFLOW_TRACKING_URL}/#/experiments/{run.info.experiment_id}/runs/{run.info.run_id}")
 
 
 if __name__ == "__main__":
