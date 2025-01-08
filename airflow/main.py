@@ -1,10 +1,10 @@
 from airflow import DAG
 from airflow.operators.python import PythonOperator, BranchPythonOperator
-from airflow.operators.dummy_operator import DummyOperator
+from airflow.operators.dummy import DummyOperator
 from datetime import datetime, timedelta
+from io import BytesIO
 from minio import Minio
 from kubernetes import client, config
-import os
 import logging
 import time
 import numpy as np
@@ -165,12 +165,12 @@ PSI_THRESHOLD = 0.2
 def calculate_psi_score(**context):
     try:
         # Fetching files from MinIO
-        preprocessed_data = minio_client.get_object(PREPROCESSED_BUCKET, PREPROCESSED_FILE)
-        train_data = minio_client.get_object(TRAIN_BUCKET, TRAIN_FILE)
+        preprocessed_object = minio_client.get_object(PREPROCESSED_BUCKET, PREPROCESSED_FILE)
+        train_object = minio_client.get_object(TRAIN_BUCKET, TRAIN_FILE)
 
         # Read files into pandas dataframes
-        preprocessed_df = pd.read_csv(preprocessed_data)
-        train_df = pd.read_csv(train_data)
+        preprocessed_df = pd.read_csv(BytesIO(preprocessed_object.data))
+        train_df = pd.read_csv(BytesIO(train_object.data))
 
         # PSI Calculation Logic
         def calculate_psi(expected_df, actual_df, columns, bucket=10):
@@ -201,10 +201,11 @@ def calculate_psi_score(**context):
 
             return total_psi, psi_details
 
-        psi_score = calculate_psi(train_df, preprocessed_df, MONITORED_FEATURES)
+        psi_score, psi_per_features = calculate_psi(train_df, preprocessed_df, MONITORED_FEATURES)
 
         context['task_instance'].xcom_push(key='psi_score', value=psi_score)
         logging.info(f"PSI Score Calculated: {psi_score}")
+        logging.info(f"Detailed PSI: {psi_per_features}")
 
     except Exception as e:
         logging.error(f"Error in calculating PSI: {str(e)}")
@@ -215,6 +216,20 @@ def calculate_psi_score(**context):
 def decide_based_on_total_psi(**context):
     total_psi = context['task_instance'].xcom_pull(task_ids='calculate_psi', key='psi_score')
     if total_psi > PSI_THRESHOLD:
+        logging.info("PSI exceeds threshold. Replacing training data with preprocessed data.")
+
+        # Delete old training data
+        if minio_client.stat_object(TRAIN_BUCKET, TRAIN_FILE):
+            minio_client.remove_object(TRAIN_BUCKET, TRAIN_FILE)
+            logging.info(f"Deleted old training data: {TRAIN_FILE}")
+
+        # Copy preprocessed data to training data bucket
+        preprocessed_data = minio_client.get_object(PREPROCESSED_BUCKET, PREPROCESSED_FILE)
+        data = preprocessed_data.data
+        data_length = len(data)
+        minio_client.put_object(TRAIN_BUCKET, TRAIN_FILE, BytesIO(data), length=data_length)
+        logging.info(f"Replaced training data with preprocessed data: {TRAIN_FILE}")
+
         return 'trigger_retraining_job'
     return 'skip_retraining'
 
