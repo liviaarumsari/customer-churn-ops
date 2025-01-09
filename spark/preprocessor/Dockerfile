@@ -6,6 +6,10 @@ RUN pip install --no-cache-dir \
     minio \
     numpy
 
+RUN pip install --no-cache-dir \ 
+    pyarrow \
+    pandas
+
 COPY preprocess.py /opt/spark/work-dir/
 
 COPY misc/WA_Fn-UseC_-Telco-Customer-Churn.csv /opt/spark/work-dir/dataset.csv

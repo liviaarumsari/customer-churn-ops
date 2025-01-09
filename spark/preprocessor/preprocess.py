@@ -1,8 +1,8 @@
 from pyspark.sql import SparkSession
 from pyspark.sql.types import *
 from pyspark.sql.functions import *
-from pyspark.ml.feature import OneHotEncoder, StringIndexer
-from minio import Minio, S3Error
+from minio import Minio
+from pyarrow import fs, parquet, Table
 import os, traceback
 
 MINIO_URL = os.getenv("MINIO_ENDPOINT")
@@ -11,6 +11,7 @@ MINIO_SECRET_KEY = os.getenv("MINIO_SECRET_KEY")
 HTTPS = os.getenv("HTTPS") == "True"
 MINIO_BUCKET = "preprocessed"
 FILENAME = "preprocessed.parquet"
+
 
 def main():
     # Initialize Spark session
@@ -74,11 +75,7 @@ def main():
     # - Churn: Yes/No
     #
     # read csv into schema
-    df = (
-        spark.read.option("header", True)
-        .schema(schema)
-        .csv("dataset.csv")
-    )
+    df = spark.read.option("header", True).schema(schema).csv("dataset.csv")
 
     # df.printSchema()
     print("Data row count:")
@@ -133,7 +130,9 @@ def main():
     print("Checking data consistency...")
     # ### Check consistency for PhoneService
     # check consistency for PhoneService related columns
-    invalid_phone = df.where("PhoneService == 'No' AND MultipleLines <> 'No phone service'")
+    invalid_phone = df.where(
+        "PhoneService == 'No' AND MultipleLines <> 'No phone service'"
+    )
 
     # subtract invalid PhoneService from df
     df = df.subtract(invalid_phone)
@@ -249,17 +248,19 @@ def main():
     print("Writing Parquet File...")
     df.write.mode("overwrite").parquet(FILENAME)
 
-    # Log message to confirm the job is complete
-    print("Preprocessor Spark Job completed successfully.")
-
-    # Stop the Spark session
-    spark.stop()
-    print("Spark Session Stopped.")
-
     # Upload file to Minio
     print("Starting Upload to MinIO...")
     minio_client = Minio(
-        MINIO_URL, access_key=MINIO_ACCESS_KEY, secret_key=MINIO_SECRET_KEY, secure=HTTPS
+        MINIO_URL,
+        access_key=MINIO_ACCESS_KEY,
+        secret_key=MINIO_SECRET_KEY,
+        secure=HTTPS,
+    )
+    minio_arrow = fs.S3FileSystem(
+        endpoint_override=MINIO_URL,
+        access_key=MINIO_ACCESS_KEY,
+        secret_key=MINIO_SECRET_KEY,
+        scheme=("http" if HTTPS is False else "https"),
     )
 
     # Check Minio bucket
@@ -271,12 +272,13 @@ def main():
     else:
         print("Bucket", MINIO_BUCKET, "already exists")
 
-    # TODO: fix upload parquet folder to minio
-    minio_client.fput_object(
-        MINIO_BUCKET,
-        FILENAME,
-        FILENAME,
+    # convert to arrow table, save to minio
+    pd_df = df.toPandas()
+    arrow_df = Table.from_pandas(pd_df)
+    parquet.write_to_dataset(
+        table=arrow_df, root_path=f"{MINIO_BUCKET}/{FILENAME}", filesystem=minio_arrow
     )
+
     print(
         FILENAME,
         "successfully uploaded as object",
@@ -284,6 +286,13 @@ def main():
         "to bucket",
         MINIO_BUCKET,
     )
+
+    # Log message to confirm the job is complete
+    print("Preprocessor Spark Job completed successfully.")
+
+    # Stop the Spark session
+    spark.stop()
+    print("Spark Session Stopped.")
 
 
 if __name__ == "__main__":
