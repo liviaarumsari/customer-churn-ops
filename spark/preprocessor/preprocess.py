@@ -24,7 +24,7 @@ def main():
 
     # Initialize Minio client
     minio_client = Minio(
-        MINIO_URL,
+        MINIO_URL.replace("http://", ""),
         access_key=MINIO_ACCESS_KEY,
         secret_key=MINIO_SECRET_KEY,
         secure=HTTPS,
@@ -281,7 +281,7 @@ def main():
     # Upload file to Minio
     print("Starting Upload to MinIO...")
     minio_arrow = fs.S3FileSystem(
-        endpoint_override=MINIO_URL,
+        endpoint_override=MINIO_URL.replace("http://", ""),
         access_key=MINIO_ACCESS_KEY,
         secret_key=MINIO_SECRET_KEY,
         scheme=("http" if HTTPS is False else "https"),

@@ -11,7 +11,7 @@ spec:
           imagePullPolicy: Never
           env:
             - name: MINIO_ENDPOINT
-              value: 'minio-service.default.svc.cluster.local:8000'
+              value: 'http://minio-service.default.svc.cluster.local:8000'
             - name: MINIO_ACCESS_KEY
               value: 'minioadmin'
             - name: MINIO_SECRET_KEY
