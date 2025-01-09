@@ -93,7 +93,6 @@ def main():
     # - check consistency for SeniorCitizen
     # - fill missing values for PhoneService or InternetService related columns
     # - delete invalid values (NaN or negatives)
-    # - one-hot encoding for string valued columns
     # - reformat for boolean columns
 
     print("Cleaning data...")
@@ -226,78 +225,6 @@ def main():
         "Tenure < 0 OR MonthlyCharges < 0 OR TotalCharges < 0 OR MonthlyCharges == 'NaN' OR TotalCharges == 'NaN'"
     )
     df = df.subtract(invalid_float)
-
-    print("One-hot encoding...")
-    # ### One-hot encoding
-    # setup string indexer for df
-    si = StringIndexer(
-        inputCols=[
-            "Gender",
-            "MultipleLines",
-            "InternetService",
-            "OnlineSecurity",
-            "OnlineBackup",
-            "DeviceProtection",
-            "TechSupport",
-            "StreamingTV",
-            "StreamingMovies",
-            "Contract",
-            "PaymentMethod",
-        ],
-        outputCols=[
-            "GenderIndexed",
-            "MultipleLinesIndexed",
-            "InternetServiceIndexed",
-            "OnlineSecurityIndexed",
-            "OnlineBackupIndexed",
-            "DeviceProtectionIndexed",
-            "TechSupportIndexed",
-            "StreamingTVIndexed",
-            "StreamingMoviesIndexed",
-            "ContractIndexed",
-            "PaymentMethodIndexed",
-        ],
-    )
-    si_model = si.fit(df)
-
-    # indexing categoricals on df
-    indexed_df = si_model.transform(df)
-
-    # setup onehotencoder
-    ohe = OneHotEncoder(
-        inputCols=[
-            "GenderIndexed",
-            "MultipleLinesIndexed",
-            "InternetServiceIndexed",
-            "OnlineSecurityIndexed",
-            "OnlineBackupIndexed",
-            "DeviceProtectionIndexed",
-            "TechSupportIndexed",
-            "StreamingTVIndexed",
-            "StreamingMoviesIndexed",
-            "ContractIndexed",
-            "PaymentMethodIndexed",
-        ],
-        outputCols=[
-            "GenderVector",
-            "MultipleLinesVector",
-            "InternetServiceVector",
-            "OnlineSecurityVector",
-            "OnlineBackupVector",
-            "DeviceProtectionVector",
-            "TechSupportVector",
-            "StreamingTVVector",
-            "StreamingMoviesVector",
-            "ContractVector",
-            "PaymentMethodVector",
-        ],
-    )
-    ohe_model = ohe.fit(indexed_df)
-
-    # encode
-    encoded_df = ohe_model.transform(indexed_df)
-
-    df = encoded_df
 
     print("Reformat...")
     # ### Reformat values
