@@ -2,7 +2,9 @@ FROM apache/spark:3.4.1
 
 USER root
 
-RUN pip install --no-cache-dir minio
+RUN pip install --no-cache-dir \
+    minio \
+    numpy
 
 COPY preprocess.py /opt/spark/work-dir/
 

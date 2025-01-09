@@ -3,11 +3,12 @@ from pyspark.sql.types import *
 from pyspark.sql.functions import *
 from pyspark.ml.feature import OneHotEncoder, StringIndexer
 from minio import Minio, S3Error
-import os
+import os, traceback
 
-MINIO_URL = "http://minio-service.default.svc.cluster.local:8000"
+MINIO_URL = os.getenv("MINIO_ENDPOINT")
 MINIO_ACCESS_KEY = os.getenv("MINIO_ACCESS_KEY")
 MINIO_SECRET_KEY = os.getenv("MINIO_SECRET_KEY")
+HTTPS = os.getenv("HTTPS") == "True"
 MINIO_BUCKET = "preprocessed"
 FILENAME = "preprocessed.parquet"
 
@@ -47,6 +48,8 @@ def main():
         ]
     )
 
+    # TODO: read dataset from minio
+
     # ## Description
     # - customerID: string
     # - gender: Male/Female
@@ -77,7 +80,7 @@ def main():
         .csv("dataset.csv")
     )
 
-    df.printSchema()
+    # df.printSchema()
     print("Data row count:")
     df.count()
 
@@ -93,11 +96,14 @@ def main():
     # - one-hot encoding for string valued columns
     # - reformat for boolean columns
 
+    print("Cleaning data...")
+    print("Renaming columns...")
     # ### Rename columns
     df = df.withColumnsRenamed(
         {"customerID": "CustomerID", "gender": "Gender", "tenure": "Tenure"}
     )
 
+    print("Dropping duplicate and null values...")
     # ### Drop duplicates and null values
     # drop duplicates
     df = df.dropDuplicates()
@@ -125,6 +131,7 @@ def main():
         ]
     )
 
+    print("Checking data consistency...")
     # ### Check consistency for PhoneService
     # check consistency for PhoneService related columns
     invalid_phone = df.where("PhoneService == 'No' AND MultipleLines <> 'No phone service'")
@@ -153,6 +160,7 @@ def main():
     # subtract
     df = df.subtract(invalid_senior)
 
+    print("Filling missing values...")
     # ### Fill missing values (PhoneService and InternetService)
     #
     # - if PhoneService or InternetService == 'Yes' and respective column is missing, drop
@@ -212,12 +220,14 @@ def main():
         }
     )
 
+    print("Removing invalid values...")
     # ### Delete invalid values
     invalid_float = df.where(
         "Tenure < 0 OR MonthlyCharges < 0 OR TotalCharges < 0 OR MonthlyCharges == 'NaN' OR TotalCharges == 'NaN'"
     )
     df = df.subtract(invalid_float)
 
+    print("One-hot encoding...")
     # ### One-hot encoding
     # setup string indexer for df
     si = StringIndexer(
@@ -289,6 +299,7 @@ def main():
 
     df = encoded_df
 
+    print("Reformat...")
     # ### Reformat values
     df = df.withColumns(
         {
@@ -302,13 +313,13 @@ def main():
             "Churn": when(col("Churn") == "Yes", True).otherwise(False),
         }
     )
-    print("Data After Preprocessing:")
-    df.show()
+    print("Data cleaned.")
     df.count()
 
     # ===============
 
     # Export
+    print("Writing Parquet File...")
     df.write.mode("overwrite").parquet(FILENAME)
 
     # Log message to confirm the job is complete
@@ -316,12 +327,12 @@ def main():
 
     # Stop the Spark session
     spark.stop()
-    print("Spark Session Stopped")
+    print("Spark Session Stopped.")
 
     # Upload file to Minio
     print("Starting Upload to MinIO...")
     minio_client = Minio(
-        MINIO_URL, access_key=MINIO_ACCESS_KEY, secret_key=MINIO_SECRET_KEY
+        MINIO_URL, access_key=MINIO_ACCESS_KEY, secret_key=MINIO_SECRET_KEY, secure=HTTPS
     )
 
     # Check Minio bucket
@@ -333,6 +344,7 @@ def main():
     else:
         print("Bucket", MINIO_BUCKET, "already exists")
 
+    # TODO: fix upload parquet folder to minio
     minio_client.fput_object(
         MINIO_BUCKET,
         FILENAME,
@@ -350,7 +362,5 @@ def main():
 if __name__ == "__main__":
     try:
         main()
-    except S3Error as e:
-        print("S3Error: ", e)
     except Exception as e:
-        print("Error: ", e)
+        print(traceback.format_exc())
