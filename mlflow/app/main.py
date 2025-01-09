@@ -1,7 +1,6 @@
 import mlflow
 import mlflow.sklearn
-from sklearn.model_selection import train_test_split
-from sklearn.preprocessing import LabelEncoder, MinMaxScaler
+from sklearn.model_selection import train_test_split, GridSearchCV, StratifiedKFold
 from sklearn.neighbors import KNeighborsClassifier
 from sklearn.metrics import accuracy_score, classification_report
 from io import BytesIO
@@ -14,6 +13,7 @@ MINIO_URL = "http://minio-service.default.svc.cluster.local:8000"
 MINIO_ACCESS_KEY = "minioadmin"
 MINIO_SECRET_KEY = "minioadmin"
 TRAIN_BUCKET = "train"
+TRAIN_FILE = "train.parquet"
 
 # Initialize MinIO client
 minio_client = Minio(
@@ -32,15 +32,12 @@ def fetch_data_from_minio(bucket_name, file_name):
         response = minio_client.get_object(bucket_name, file_name)
 
         # Load data into Pandas DataFrame
-        data = pd.read_csv(BytesIO(response.data))
+        data = pd.read_parquet(BytesIO(response.read()))
         print(f"Successfully fetched data from {bucket_name}/{file_name}")
         return data
     except Exception as e:
         print(f"Error fetching data: {e}")
         raise
-
-
-TRAIN_FILE = "train_data.csv"
 
 
 def main():
@@ -51,55 +48,52 @@ def main():
     # Fetch training data from MinIO
     data = fetch_data_from_minio(TRAIN_BUCKET, TRAIN_FILE)
 
-    # Preprocess the data
-    X = data.drop("Churn", axis=1)
-    y = LabelEncoder().fit_transform(data["Churn"])
+    # Separate features and target
+    X = data.drop(columns=["Churn", "CustomerID"], errors="ignore")
+    y = data["Churn"].astype(int)
 
-    # Separate customerID
-    X = X.drop(columns=["customerID"], errors="ignore")
+    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
 
-    # Detect and encode all non-numeric columns
-    categorical_cols = X.select_dtypes(include=['object']).columns
-    le = LabelEncoder()
-    for col in categorical_cols:
-        X[col] = le.fit_transform(X[col].astype(str))
+    # Hyperparameter tuning with GridSearchCV
+    param_grid = {
+        'n_neighbors': [3, 5, 7],
+        'weights': ['uniform', 'distance'],
+        'metric': ['euclidean', 'manhattan']
+    }
+    knn = KNeighborsClassifier()
 
-    # Scale the features
-    scaler = MinMaxScaler()
-    X_scaled = scaler.fit_transform(X)
-
-    X_train, X_test, y_train, y_test = train_test_split(X_scaled, y, test_size=0.2, random_state=42)
-
-    # Train the model
-    knn = KNeighborsClassifier(n_neighbors=5)
+    # Use StratifiedKFold for better validation
+    skf = StratifiedKFold(n_splits=3, shuffle=True, random_state=42)
+    grid_search = GridSearchCV(knn, param_grid, cv=skf, scoring='accuracy', n_jobs=2)
 
     with mlflow.start_run() as run:
-        # Log parameters
-        mlflow.log_param("model_type", "KNN")
-        mlflow.log_param("n_neighbors", 5)
+        # Log parameters being tuned
+        mlflow.log_param("param_grid", param_grid)
 
-        # Fit the model
-        knn.fit(X_train, y_train)
+        # Fit the GridSearchCV
+        grid_search.fit(X_train, y_train)
 
-        # Predict and evaluate
-        y_pred = knn.predict(X_test)
+        # Best parameters and model
+        best_params = grid_search.best_params_
+        best_model = grid_search.best_estimator_
+
+        # Log best parameters
+        mlflow.log_params(best_params)
+
+        # Evaluate the model on the test set
+        y_pred = best_model.predict(X_test)
         accuracy = accuracy_score(y_test, y_pred)
         report = classification_report(y_test, y_pred, output_dict=True, zero_division=0)
 
         # Log metrics
         mlflow.log_metric("accuracy", accuracy)
-        mlflow.log_metric("precision", float(report.get("1", {}).get("precision")))
-        mlflow.log_metric("recall", float(report.get("1", {}).get("recall")))
+        mlflow.log_metric("precision", float(report.get("1", {}).get("precision", 0)))
+        mlflow.log_metric("recall", float(report.get("1", {}).get("recall", 0)))
 
         # input_example = np.array([X_train[0]])
         # Log the model
         # mlflow.sklearn.log_model(knn, "knn_model", input_example=input_example)
 
-        predictions = pd.DataFrame({
-            "prediction": y_pred
-        })
-
-        print(predictions.head())
         print(f"Run ID: {run.info.run_id}")
         print("Model logged successfully!")
 

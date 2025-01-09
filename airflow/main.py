@@ -156,8 +156,8 @@ def trigger_retraining_job():
 
 
 # CONSTANT
-PREPROCESSED_FILE = "preprocessed_data.csv"
-TRAIN_FILE = "train_data.csv"
+PREPROCESSED_FILE = "preprocessed.parquet"
+TRAIN_FILE = "train.parquet"
 MONITORED_FEATURES = ["MonthlyCharges", "TotalCharges"]
 PSI_THRESHOLD = 0.2
 
@@ -169,8 +169,8 @@ def calculate_psi_score(**context):
         train_object = minio_client.get_object(TRAIN_BUCKET, TRAIN_FILE)
 
         # Read files into pandas dataframes
-        preprocessed_df = pd.read_csv(BytesIO(preprocessed_object.data))
-        train_df = pd.read_csv(BytesIO(train_object.data))
+        preprocessed_df = pd.read_parquet(BytesIO(preprocessed_object.read()))
+        train_df = pd.read_parquet(BytesIO(train_object.read()))
 
         # PSI Calculation Logic
         def calculate_psi(expected_df, actual_df, columns, bucket=10):
@@ -267,10 +267,10 @@ with DAG(
     )
 
     # Task 3a: Trigger Spark Job
-    spark_preprocessor_task = PythonOperator(
-        task_id="trigger_spark_preprocessor",
-        python_callable=trigger_spark_job,
-    )
+    # spark_preprocessor_task = PythonOperator(
+    #     task_id="trigger_spark_preprocessor",
+    #     python_callable=trigger_spark_job,
+    # )
 
     # Task 3b: No large files found
     no_large_files = DummyOperator(task_id='no_large_files')
@@ -301,8 +301,8 @@ with DAG(
     )
 
     # Task dependencies graph
-    check_files_task >> decide_step
-    decide_step >> [spark_preprocessor_task, no_large_files]
-    spark_preprocessor_task >> calculate_psi_task
+    # check_files_task >> decide_step
+    # decide_step >> [spark_preprocessor_task, no_large_files]
+    # spark_preprocessor_task >> calculate_psi_task
     calculate_psi_task >> decide_retraining_task
     decide_retraining_task >> [retraining_job, skip_retraining_task]
