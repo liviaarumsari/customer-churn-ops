@@ -9,13 +9,26 @@ MINIO_URL = os.getenv("MINIO_ENDPOINT")
 MINIO_ACCESS_KEY = os.getenv("MINIO_ACCESS_KEY")
 MINIO_SECRET_KEY = os.getenv("MINIO_SECRET_KEY")
 HTTPS = os.getenv("HTTPS") == "True"
-MINIO_BUCKET = "preprocessed"
+MINIO_BUCKET_SRC = "raw"
+MINIO_BUCKET_DEST = "preprocessed"
 FILENAME = "preprocessed.parquet"
+
+
+class NoDataSourceException(Exception):
+    pass
 
 
 def main():
     # Initialize Spark session
     spark = SparkSession.builder.appName("Preprocessor").getOrCreate()
+
+    # Initialize Minio client
+    minio_client = Minio(
+        MINIO_URL,
+        access_key=MINIO_ACCESS_KEY,
+        secret_key=MINIO_SECRET_KEY,
+        secure=HTTPS,
+    )
 
     # Log message to confirm the script is running
     print("Running Preprocessor Spark Job...")
@@ -49,8 +62,6 @@ def main():
         ]
     )
 
-    # TODO: read dataset from minio
-
     # ## Description
     # - customerID: string
     # - gender: Male/Female
@@ -74,6 +85,25 @@ def main():
     # - TotalCharges: float
     # - Churn: Yes/No
     #
+
+    # read dataset.csv from bucket
+    # Check Minio bucket
+    print("Check MinIO Bucket Availability...")
+    found = minio_client.bucket_exists(MINIO_BUCKET_SRC)
+    if not found:
+        print("Raw Data Source Bucket does not exist")
+        raise NoDataSourceException(f"{MINIO_BUCKET_SRC} bucket does not exist")
+
+    # Download dataset
+    download_success = minio_client.fget_object(
+        MINIO_BUCKET_SRC, "dataset.csv", "dataset.csv"
+    )
+    if download_success:
+        print("Fetched dataset.")
+    else:
+        print("Failed to get dataset")
+        raise NoDataSourceException("dataset download failed")
+
     # read csv into schema
     df = spark.read.option("header", True).schema(schema).csv("dataset.csv")
 
@@ -250,12 +280,6 @@ def main():
 
     # Upload file to Minio
     print("Starting Upload to MinIO...")
-    minio_client = Minio(
-        MINIO_URL,
-        access_key=MINIO_ACCESS_KEY,
-        secret_key=MINIO_SECRET_KEY,
-        secure=HTTPS,
-    )
     minio_arrow = fs.S3FileSystem(
         endpoint_override=MINIO_URL,
         access_key=MINIO_ACCESS_KEY,
@@ -265,18 +289,20 @@ def main():
 
     # Check Minio bucket
     print("Check MinIO Bucket Availability...")
-    found = minio_client.bucket_exists(MINIO_BUCKET)
+    found = minio_client.bucket_exists(MINIO_BUCKET_DEST)
     if not found:
-        minio_client.make_bucket(MINIO_BUCKET)
-        print("Created bucket", MINIO_BUCKET)
+        minio_client.make_bucket(MINIO_BUCKET_DEST)
+        print("Created bucket", MINIO_BUCKET_DEST)
     else:
-        print("Bucket", MINIO_BUCKET, "already exists")
+        print("Bucket", MINIO_BUCKET_DEST, "already exists")
 
     # convert to arrow table, save to minio
     pd_df = df.toPandas()
     arrow_df = Table.from_pandas(pd_df)
     parquet.write_to_dataset(
-        table=arrow_df, root_path=f"{MINIO_BUCKET}/{FILENAME}", filesystem=minio_arrow
+        table=arrow_df,
+        root_path=f"{MINIO_BUCKET_DEST}/{FILENAME}",
+        filesystem=minio_arrow,
     )
 
     print(
@@ -284,7 +310,7 @@ def main():
         "successfully uploaded as object",
         FILENAME,
         "to bucket",
-        MINIO_BUCKET,
+        MINIO_BUCKET_DEST,
     )
 
     # Log message to confirm the job is complete
