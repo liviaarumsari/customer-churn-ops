@@ -1,5 +1,6 @@
 import mlflow
 import mlflow.sklearn
+from sklearn.preprocessing import OneHotEncoder, LabelEncoder, MinMaxScaler
 from sklearn.model_selection import train_test_split, GridSearchCV, StratifiedKFold
 from sklearn.neighbors import KNeighborsClassifier
 from sklearn.metrics import accuracy_score, classification_report
@@ -48,11 +49,29 @@ def main():
     # Fetch training data from MinIO
     data = fetch_data_from_minio(TRAIN_BUCKET, TRAIN_FILE)
 
-    # Separate features and target
+    # Preprocess the data
     X = data.drop(columns=["Churn", "CustomerID"], errors="ignore")
-    y = data["Churn"].astype(int)
+    y = LabelEncoder().fit_transform(data["Churn"])
 
-    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+    # Detect and encode all non-numeric columns
+    categorical_cols = X.select_dtypes(include=['object']).columns
+
+    # One-hot encode categorical columns
+    ohe = OneHotEncoder(handle_unknown="ignore")
+    X_encoded = pd.DataFrame(
+        ohe.fit_transform(X[categorical_cols]),
+        columns=ohe.get_feature_names_out(categorical_cols),
+        index=X.index
+    )
+
+    # Combine encoded columns with the rest of the DataFrame
+    X = pd.concat([X.drop(columns=categorical_cols), X_encoded], axis=1)
+
+    # Scale the features
+    scaler = MinMaxScaler()
+    X_scaled = scaler.fit_transform(X)
+
+    X_train, X_test, y_train, y_test = train_test_split(X_scaled, y, test_size=0.2, random_state=42)
 
     # Hyperparameter tuning with GridSearchCV
     param_grid = {
