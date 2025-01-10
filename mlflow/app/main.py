@@ -57,7 +57,7 @@ def main():
     categorical_cols = X.select_dtypes(include=['object']).columns
 
     # One-hot encode categorical columns
-    ohe = OneHotEncoder(handle_unknown="ignore")
+    ohe = OneHotEncoder(handle_unknown="ignore", sparse_output=False)
     X_encoded = pd.DataFrame(
         ohe.fit_transform(X[categorical_cols]),
         columns=ohe.get_feature_names_out(categorical_cols),

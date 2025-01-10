@@ -183,57 +183,49 @@ def calculate_psi_score(**context):
         preprocessed_df = pd.read_parquet(BytesIO(preprocessed_object.read()))
         train_df = pd.read_parquet(BytesIO(train_object.read()))
 
-        # PSI Calculation Logic
-        def calculate_psi(expected_df, actual_df, columns, bucket=10):
+        # Exclude CustomerID and Churn columns
+        features = [col for col in train_df.columns if col not in ['CustomerID', 'Churn']]
+
+        def calculate_psi(expected_series, actual_series, bucket=10):
             """
-            Calculate the total PSI for a dataset by summing PSI values for individual features.
+            Calculate PSI for a single feature.
             """
-            total_psi = 0
-            psi_details = {}
+            if expected_series.dtype == 'O' or actual_series.dtype == 'O':
+                # Handle categorical features
+                expected_perc = expected_series.value_counts(normalize=True)
+                actual_perc = actual_series.value_counts(normalize=True)
 
-            for col in columns:
-                expected = expected_df[col]
-                actual = actual_df[col]
+                # Align on the same categories
+                all_categories = set(expected_perc.index).union(set(actual_perc.index))
+                expected_perc = expected_perc.reindex(all_categories, fill_value=0)
+                actual_perc = actual_perc.reindex(all_categories, fill_value=0)
+            else:
+                # Handle numerical features by binning
+                bins = np.linspace(expected_series.min(), expected_series.max(), bucket + 1)
+                expected_perc = np.histogram(expected_series, bins=bins, density=True)[0]
+                actual_perc = np.histogram(actual_series, bins=bins, density=True)[0]
 
-                # Calculate percentage distributions for observed and expected
-                observed_perc = np.histogram(
-                    actual,
-                    bins=bucket,
-                    range=(expected.min(), expected.max()),
-                    density=True,
-                )[0]
-                expected_perc = np.histogram(
-                    expected,
-                    bins=bucket,
-                    range=(expected.min(), expected.max()),
-                    density=True,
-                )[0]
+            # Avoid division by zero
+            expected_perc = np.where(expected_perc == 0, 0.0000000001, expected_perc)
+            actual_perc = np.where(actual_perc == 0, 0.0000000001, actual_perc)
 
-                # Avoid division by zero
-                expected_perc = np.where(
-                    expected_perc == 0, 0.0000000001, expected_perc
-                )
-                observed_perc = np.where(
-                    observed_perc == 0, 0.0000000001, observed_perc
-                )
+            # Calculate PSI
+            psi = np.sum((actual_perc - expected_perc) * np.log(actual_perc / expected_perc))
+            return psi
 
-                # Calculate PSI for this feature
-                psi = np.sum(
-                    (observed_perc - expected_perc)
-                    * np.log(observed_perc / expected_perc)
-                )
-                psi_details[col] = psi
-                total_psi += psi
+        # Calculate PSI for each feature
+        psi_details = {}
+        for feature in features:
+            psi = calculate_psi(train_df[feature], preprocessed_df[feature])
+            psi_details[feature] = psi
 
-            return total_psi, psi_details
+        # Total PSI
+        total_psi = sum(psi_details.values())
 
-        psi_score, psi_per_features = calculate_psi(
-            train_df, preprocessed_df, MONITORED_FEATURES
-        )
-
-        context["task_instance"].xcom_push(key="psi_score", value=psi_score)
-        logging.info(f"PSI Score Calculated: {psi_score}")
-        logging.info(f"Detailed PSI: {psi_per_features}")
+        # Push results to XCom
+        context['task_instance'].xcom_push(key='psi_score', value=total_psi)
+        logging.info(f"Total PSI Score Calculated: {total_psi}")
+        logging.info(f"Detailed PSI per feature: {psi_details}")
 
     except Exception as e:
         logging.error(f"Error in calculating PSI: {str(e)}")
@@ -303,10 +295,10 @@ with DAG(
     )
 
     # Task 3a: Trigger Spark Job
-    # spark_preprocessor_task = PythonOperator(
-    #     task_id="trigger_spark_preprocessor",
-    #     python_callable=trigger_spark_job,
-    # )
+    spark_preprocessor_task = PythonOperator(
+        task_id="trigger_spark_preprocessor",
+        python_callable=trigger_spark_job,
+    )
 
     # Task 3b: No large files found
     no_large_files = DummyOperator(task_id="no_large_files")
@@ -337,8 +329,8 @@ with DAG(
     )
 
     # Task dependencies graph
-    # check_files_task >> decide_step
-    # decide_step >> [spark_preprocessor_task, no_large_files]
-    # spark_preprocessor_task >> calculate_psi_task
+    check_files_task >> decide_step
+    decide_step >> [spark_preprocessor_task, no_large_files]
+    spark_preprocessor_task >> calculate_psi_task
     calculate_psi_task >> decide_retraining_task
     decide_retraining_task >> [retraining_job, skip_retraining_task]
