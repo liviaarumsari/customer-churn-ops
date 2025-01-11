@@ -20,7 +20,7 @@ class NoDataSourceException(Exception):
 
 def main():
     # Initialize Spark session
-    spark = SparkSession.builder.appName("Preprocessor").getOrCreate()
+    spark = SparkSession.builder.appName("Preprocessor").config("spark.executor.memory", "3g").config("spark.driver.memory", "2g").config("spark.executor.cores", "2").config("spark.dynamicAllocation.enabled", "true").config("spark.dynamicAllocation.minExecutors", "1").config("spark.dynamicAllocation.maxExecutors", "4").config("spark.sql.shuffle.partitions", "50").getOrCreate()
 
     # Initialize Minio client
     minio_client = Minio(
@@ -29,6 +29,15 @@ def main():
         secret_key=MINIO_SECRET_KEY,
         secure=HTTPS,
     )
+
+    # Check Minio bucket
+    print("Check MinIO Destination Bucket Availability...")
+    found = minio_client.bucket_exists(MINIO_BUCKET_DEST)
+    if not found:
+        minio_client.make_bucket(MINIO_BUCKET_DEST)
+        print("Created bucket", MINIO_BUCKET_DEST)
+    else:
+        print("Bucket", MINIO_BUCKET_DEST, "already exists")
 
     # Log message to confirm the script is running
     print("Running Preprocessor Spark Job...")
@@ -104,12 +113,16 @@ def main():
         print("Failed to get dataset")
         raise NoDataSourceException("dataset download failed")
 
+    # remove dataset after read
+    minio_client.remove_object(MINIO_BUCKET_SRC, "dataset.csv")
+    print(f"Removed raw dataset from bucket {MINIO_BUCKET_SRC}")
+
     # read csv into schema
     df = spark.read.option("header", True).schema(schema).csv("dataset.csv")
 
     # df.printSchema()
-    print("Data row count:")
-    df.count()
+    # print("Data row count:")
+    # df.count()
 
     # =================
     # ## DATA CLEANING
@@ -270,7 +283,7 @@ def main():
         }
     )
     print("Data cleaned.")
-    df.count()
+    # df.count()
 
     # ===============
 
@@ -287,15 +300,6 @@ def main():
         scheme=("http" if HTTPS is False else "https"),
     )
 
-    # Check Minio bucket
-    print("Check MinIO Bucket Availability...")
-    found = minio_client.bucket_exists(MINIO_BUCKET_DEST)
-    if not found:
-        minio_client.make_bucket(MINIO_BUCKET_DEST)
-        print("Created bucket", MINIO_BUCKET_DEST)
-    else:
-        print("Bucket", MINIO_BUCKET_DEST, "already exists")
-
     # convert to arrow table, save to minio
     pd_df = df.toPandas()
     arrow_df = Table.from_pandas(pd_df)
@@ -304,6 +308,14 @@ def main():
         root_path=f"{MINIO_BUCKET_DEST}/{FILENAME}",
         filesystem=minio_arrow,
     )
+
+    # df.write.format("parquet") \
+    # .mode("overwrite") \
+    # .option("path", f"s3a://{MINIO_BUCKET_DEST}/{FILENAME}") \
+    # .option("fs.s3a.endpoint", MINIO_URL.replace("http://", "")) \
+    # .option("fs.s3a.access.key", MINIO_ACCESS_KEY) \
+    # .option("fs.s3a.secret.key", MINIO_SECRET_KEY) \
+    # .save()
 
     print(
         FILENAME,
