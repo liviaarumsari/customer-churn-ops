@@ -4,6 +4,7 @@ from airflow.operators.dummy import DummyOperator
 from datetime import datetime, timedelta
 from io import BytesIO
 from minio import Minio
+from minio.error import S3Error
 from kubernetes import client, config
 import logging
 import time
@@ -36,7 +37,7 @@ def check_minio_files():
         for obj in objects:
             file_info = minio_client.stat_object(RAW_BUCKET, obj.object_name)
             logging.info(f"Found file: {obj.object_name}, Size: {file_info.size} bytes")
-            if file_info.size > 288000:  # TODO: Update threshold
+            if file_info.size > 1:
                 logging.info(f"File {obj.object_name} exceeds threshold!")
                 return obj.object_name
         logging.info("No files exceeded the threshold.")
@@ -64,6 +65,7 @@ def trigger_spark_job():
         job = client.V1Job(
             metadata=client.V1ObjectMeta(name="spark-preprocessor"),
             spec=client.V1JobSpec(
+                backoff_limit=1,
                 template=client.V1PodTemplateSpec(
                     spec=client.V1PodSpec(
                         containers=[
@@ -71,6 +73,10 @@ def trigger_spark_job():
                                 name="spark-preprocessor",
                                 image="spark-preprocessor:latest",
                                 image_pull_policy="Never",
+                                resources=client.V1ResourceRequirements(
+                                    limits={"memory": "4Gi", "cpu": "2"},
+                                    requests={"memory": "2Gi", "cpu": "1"},
+                                ),
                                 env=[
                                     client.V1EnvVar(
                                         name="MINIO_ENDPOINT", value=MINIO_URL
@@ -93,6 +99,39 @@ def trigger_spark_job():
 
         # Create the Job in the "default" namespace
         batch_v1 = client.BatchV1Api()
+
+        # Check if the job already exists
+        try:
+            existing_job = batch_v1.read_namespaced_job(
+                name="spark-preprocessor", namespace="default"
+            )
+            if existing_job:
+                logging.info("Job already exists. Deleting existing job...")
+                batch_v1.delete_namespaced_job(
+                    name="spark-preprocessor",
+                    namespace="default",
+                    body=client.V1DeleteOptions(propagation_policy="Foreground"),
+                )
+                # Wait for the job to be deleted
+                while True:
+                    try:
+                        batch_v1.read_namespaced_job(
+                            name="spark-preprocessor", namespace="default"
+                        )
+                        time.sleep(1)  # Wait for deletion to complete
+                    except client.exceptions.ApiException as e:
+                        if e.status == 404:  # Not Found
+                            break
+                        else:
+                            raise
+
+        except client.exceptions.ApiException as e:
+            if e.status == 404:  # Not Found
+                logging.info("No existing job found. Proceeding to create a new job.")
+            else:
+                raise
+
+
         batch_v1.create_namespaced_job(namespace="default", body=job)
         logging.info("Spark Preprocessor job triggered successfully.")
 
@@ -143,6 +182,38 @@ def trigger_retraining_job():
 
         # Create the Job in the "default" namespace
         batch_v1 = client.BatchV1Api()
+
+        # Check if the job already exists
+        try:
+            existing_job = batch_v1.read_namespaced_job(
+                name="mlflow-job", namespace="default"
+            )
+            if existing_job:
+                logging.info("Job already exists. Deleting existing job...")
+                batch_v1.delete_namespaced_job(
+                    name="mlflow-job",
+                    namespace="default",
+                    body=client.V1DeleteOptions(propagation_policy="Foreground"),
+                )
+                # Wait for the job to be deleted
+                while True:
+                    try:
+                        batch_v1.read_namespaced_job(
+                            name="mlflow-job", namespace="default"
+                        )
+                        time.sleep(1)  # Wait for deletion to complete
+                    except client.exceptions.ApiException as e:
+                        if e.status == 404:  # Not Found
+                            break
+                        else:
+                            raise
+
+        except client.exceptions.ApiException as e:
+            if e.status == 404:  # Not Found
+                logging.info("No existing job found. Proceeding to create a new job.")
+            else:
+                raise
+
         batch_v1.create_namespaced_job(namespace="default", body=job)
         logging.info("MLFlow Retraining job triggered successfully.")
 
@@ -165,32 +236,50 @@ def trigger_retraining_job():
 
 
 # CONSTANT
-PREPROCESSED_FILE = "preprocessed.parquet"
+PREPROCESSED_FILE_PREFIX = "preprocessed.parquet/"
 TRAIN_FILE = "train.parquet"
-MONITORED_FEATURES = ["MonthlyCharges", "TotalCharges"]
+NUMERICAL_COLUMNS = ["Tenure", "MonthlyCharges", "TotalCharges"]
 PSI_THRESHOLD = 0.2
 
 
 def calculate_psi_score(**context):
     try:
         # Fetching files from MinIO
-        preprocessed_object = minio_client.get_object(
-            PREPROCESSED_BUCKET, PREPROCESSED_FILE
+        objects = list(
+            minio_client.list_objects(
+                PREPROCESSED_BUCKET, prefix=PREPROCESSED_FILE_PREFIX, recursive=True
+            )
         )
-        train_object = minio_client.get_object(TRAIN_BUCKET, TRAIN_FILE)
+
+        if not objects:
+            raise Exception("No objects found in MinIO under the specified prefix.")
+
+        for obj in objects:
+            print(f"Found object: {obj.object_name}")
+
+        first_file = objects[1].object_name
+        preprocessed_object = minio_client.get_object(PREPROCESSED_BUCKET, first_file)
 
         # Read files into pandas dataframes
         preprocessed_df = pd.read_parquet(BytesIO(preprocessed_object.read()))
-        train_df = pd.read_parquet(BytesIO(train_object.read()))
+
+        # Check if training data exists in the bucket
+        try:
+            train_object = minio_client.get_object(TRAIN_BUCKET, TRAIN_FILE)
+            train_df = pd.read_parquet(BytesIO(train_object.read()))
+        except S3Error as e:
+            logging.warning(f"Training data not found: {TRAIN_FILE}. Triggering retraining.")
+            context['task_instance'].xcom_push(key='psi_score', value=1.0)
+            return
 
         # Exclude CustomerID and Churn columns
         features = [col for col in train_df.columns if col not in ['CustomerID', 'Churn']]
 
-        def calculate_psi(expected_series, actual_series, bucket=10):
+        def calculate_psi(expected_series, actual_series, bucket=10, is_numerical=False):
             """
             Calculate PSI for a single feature.
             """
-            if expected_series.dtype == 'O' or actual_series.dtype == 'O':
+            if not is_numerical:
                 # Handle categorical features
                 expected_perc = expected_series.value_counts(normalize=True)
                 actual_perc = actual_series.value_counts(normalize=True)
@@ -216,7 +305,8 @@ def calculate_psi_score(**context):
         # Calculate PSI for each feature
         psi_details = {}
         for feature in features:
-            psi = calculate_psi(train_df[feature], preprocessed_df[feature])
+            is_numerical = feature in NUMERICAL_COLUMNS
+            psi = calculate_psi(train_df[feature], preprocessed_df[feature], is_numerical)
             psi_details[feature] = psi
 
         # Total PSI
@@ -242,15 +332,29 @@ def decide_based_on_total_psi(**context):
             "PSI exceeds threshold. Replacing training data with preprocessed data."
         )
 
-        # Delete old training data
-        if minio_client.stat_object(TRAIN_BUCKET, TRAIN_FILE):
+        # Check and delete old training data if it exists
+        try:
+            minio_client.stat_object(TRAIN_BUCKET, TRAIN_FILE)
             minio_client.remove_object(TRAIN_BUCKET, TRAIN_FILE)
             logging.info(f"Deleted old training data: {TRAIN_FILE}")
+        except S3Error as e:
+            if e.code == "NoSuchKey":
+                logging.warning(f"Training file {TRAIN_FILE} does not exist in bucket {TRAIN_BUCKET}. Proceeding...")
+            else:
+                raise
 
         # Copy preprocessed data to training data bucket
-        preprocessed_data = minio_client.get_object(
-            PREPROCESSED_BUCKET, PREPROCESSED_FILE
-        )
+        # Fetching files from MinIO
+        objects = list(minio_client.list_objects(
+            PREPROCESSED_BUCKET, prefix=PREPROCESSED_FILE_PREFIX, recursive=True
+        ))
+
+        for obj in objects:
+            print(f"Found object: {obj.object_name}")
+
+        first_file = objects[1].object_name
+        preprocessed_data = minio_client.get_object(PREPROCESSED_BUCKET, first_file)
+
         data = preprocessed_data.data
         data_length = len(data)
         minio_client.put_object(
@@ -268,14 +372,14 @@ default_args = {
     "depends_on_past": False,
     "email_on_failure": False,
     "email_on_retry": False,
-    "retries": 1,
+    "retries": 0,
     "retry_delay": timedelta(minutes=1),
 }
 with DAG(
-    dag_id="minio_to_spark",
+    dag_id="cust_churn_workflow",
     default_args=default_args,
     description="DAG to watch MinIO and trigger Spark preprocessing",
-    schedule_interval=timedelta(minutes=3),
+    schedule_interval="0 * * * *",
     start_date=datetime(2025, 1, 1),
     catchup=False,
 ) as dag:
