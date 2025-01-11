@@ -6,6 +6,7 @@ from sklearn.neighbors import KNeighborsClassifier
 from sklearn.metrics import accuracy_score, classification_report
 from io import BytesIO
 import pandas as pd
+import numpy as np
 from minio import Minio
 
 # Minio configuration
@@ -45,6 +46,7 @@ def main():
     # MLflow setup
     mlflow.set_tracking_uri(MLFLOW_TRACKING_URL)
     mlflow.set_experiment("Customer_Churn_Model")
+    mlflow.set_registry_uri(f"s3://{MINIO_URL.replace('http://', '')}")
 
     # Fetch training data from MinIO
     data = fetch_data_from_minio(TRAIN_BUCKET, TRAIN_FILE)
@@ -109,9 +111,9 @@ def main():
         mlflow.log_metric("precision", float(report.get("1", {}).get("precision", 0)))
         mlflow.log_metric("recall", float(report.get("1", {}).get("recall", 0)))
 
-        # input_example = np.array([X_train[0]])
+        input_example = np.array([X_train[0]])
         # Log the model
-        # mlflow.sklearn.log_model(knn, "knn_model", input_example=input_example)
+        mlflow.sklearn.log_model(knn, "knn_model", input_example=input_example)
 
         print(f"Run ID: {run.info.run_id}")
         print("Model logged successfully!")
